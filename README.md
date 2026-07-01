@@ -109,3 +109,5 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 ## License
 
 <!-- [Add a license, e.g. MIT — currently unspecified] -->
+
+<!-- https://circuitdigest.com/electronic-circuits/half-wave-and-full-wave-precision-rectifier-circuit-using-op-amp -->

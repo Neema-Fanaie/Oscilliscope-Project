@@ -7,11 +7,17 @@
 #include <avr/interrupt.h>
 
 // Hardware Interrupts
-volatile uint16_t latestReading = 0;
-volatile bool newReadingAvailable = false;
-uint16_t reading_tot = 0;
-float reading;
+volatile uint16_t latestReadingA0 = 0;
+volatile uint16_t latestReadingA1 = 0;
+volatile bool newReadingAvailableA0 = false;
+volatile bool newReadingAvailableA1 = false;
 
+volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1
+
+uint16_t reading_tot = 0;
+uint16_t valA0;
+uint16_t valA1;
+float reading;
 
 const int PWM_Pin = 7;
 const int Read_Pin = A0;
@@ -26,7 +32,7 @@ const int Width_Pin = A1;
 
 int GRAPH_WIDTH = 128;
 int GRAPH_HEIGHT = 65;   // adjust to your display height
-int Y_SCALE = 10;        // adjust scaling to fit your temp range
+int Y_SCALE = 5;        // adjust scaling to fit your temp range
 int X_SCALE = 1;
 
 // Screen Details 
@@ -57,9 +63,9 @@ void setupTimer1() {
     TCNT1 = 0;
 
     // Example: prescaler 64, OCR1A = 249 -> 1ms period (1kHz sample rate)
-    // Adjust OCR1A for your desired sample interval:
-    // period(s) = (OCR1A + 1) * prescaler / 16,000,000    OCR1A = 249;
-    OCR1A = 249;
+    // Adjust OCR1A for your desired sample interval: OCR1A = 249 by default
+    // period(s) = (OCR1A + 1) * prescaler / 16,000,000;
+    OCR1A = 125;
     TCCR1B |= (1 << WGM12);
     TCCR1B |= (1 << CS11) | (1 << CS10);
 
@@ -70,8 +76,8 @@ void setupTimer1() {
 }
 
 void setupADC() {
-    // AVcc reference, channel A0
-    ADMUX = (1 << REFS0);
+    // AVcc reference, start on channel A0
+    ADMUX = (1 << REFS0); // channel bits = 0000 -> A0
 
     // Enable ADC
     // Enable ADC interrupt
@@ -84,13 +90,21 @@ void setupADC() {
 
 // Timer1 fires every 1 ms
 ISR(TIMER1_COMPA_vect) {
-    // Start an ADC conversion
+    // Select the channel to sample this tick, then start conversion
+    ADMUX = (ADMUX & 0xF0) | (currentChannel & 0x0F); // keep REFS bits, set MUX bits
     ADCSRA |= (1 << ADSC);
 }
 
 ISR(ADC_vect) {
-    latestReading = ADC;
-    newReadingAvailable = true;
+    if (currentChannel == 0) {
+        latestReadingA0 = ADC;
+        newReadingAvailableA0 = true;
+        currentChannel = 1; // next tick will sample A1
+    } else {
+        latestReadingA1 = ADC;
+        newReadingAvailableA1 = true;
+        currentChannel = 0; // next tick will sample A0
+    }
 }
 
 void gen_signal(){
@@ -102,17 +116,125 @@ void gen_signal(){
   }
 }
 
-void queue_Control(float reading){
-  if (q.isFull()){
-    int my_val;
-    
-    q.pop(&my_val);
-    q.push(&reading);
+void queue_Control(float valA0, float valA1) {
+  const float ALPHA = 0.9f; 
+  const float THRESHOLD = 0.25f;
+
+  static float filteredA0 = 0.0f;
+  static float filteredA1 = 0.0f;
+
+  float readingA0 = valA0 * 4.81f / 1023.0f;
+  float readingA1 = valA1 * 4.81f / 1023.0f;
+
+  filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
+  filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
+
+  if (q.isFull()) {
+    float discard;
+    q.pop(&discard);
+  }
+
+  float value = 0.0f;
+  if (filteredA0 >= THRESHOLD) {
+    value = filteredA0;
+  } else if (filteredA1 >= THRESHOLD) {
+    value = -filteredA1;
+  }
+
+  q.push(&value);
+}
+
+void grid(){
+// --- grid drawing ---
+  for (uint8_t i = 0; i <= 8; i++) {
+    for (uint8_t j = 0; j <= 4; j++) {
+      uint8_t x = i * 16;
+      uint8_t y = j * 16;
+
+      if (x == 0 && y == 0){
+        display.drawLine(x, y, x+1, y);
+        display.drawLine(x, y, x, y+1);
+
+        display.drawLine(x + 6, y, x + 9, y);
+        display.drawLine(x, y + 6, x, y + 9);
+
+      } else if (x == 0 ){
+      
+        display.drawLine(x, y-1, x+1, y-1);
+        display.drawLine(x, y-2, x, y);
+
+        display.drawLine(x + 6, y - 1 , x + 9, y -1);
+        display.drawLine(x, y + 5 , x, y + 8);
+      
+      } else if (y == 0){
+
+        display.drawLine(x-2, y, x, y);
+        display.drawLine(x-1, y, x-1, y+1);         
+
+        display.drawLine(x + 5, y, x + 8, y);
+        display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
+      
+      } else {
+        display.drawLine(x - 2, y - 1 , x, y -1);
+        display.drawLine(x - 1, y -2, x - 1 , y);
+
+        display.drawLine(x + 6, y - 1 , x + 9, y -1);
+        display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
+      }
+    }
+  }
+}
+
+void graph(){
+  // --- graph drawing ---
+  int count = q.getCount();
   
-  } else {
+  if (count >= 2) {
     
-    q.push(&reading);
-  
+    float temps[GRAPH_WIDTH];
+    
+    for (int i = 0; i < count; i++) {
+      
+      q.peekIdx(&temps[i], i);
+    
+    }
+    
+    for (int i = 0; i < count - 1; i++) {
+      
+      int x1 = GRAPH_WIDTH - count + i;
+      int y1 = GRAPH_HEIGHT - static_cast<int>(temps[i] * Y_SCALE * 10) / 10 - 2;
+      int x2 = GRAPH_WIDTH - count + i + 1;
+      int y2 = GRAPH_HEIGHT - static_cast<int>(temps[i + 1] * Y_SCALE * 10) / 10 - 2;
+      display.drawLine(x1, y1, x2, y2);
+    
+    }
+  }
+}
+
+void graph2() {
+  uint8_t count = q.getCount();
+  int8_t midpoint = GRAPH_HEIGHT / 2;
+
+  if (count < 2) return;
+
+  float temps[GRAPH_WIDTH];
+  for (uint8_t i = 0; i < count; i++) {
+    q.peekIdx(&temps[i], i);
+  }
+
+  for (uint8_t i = 0; i < count - 1; i++) {
+    uint8_t x1 = GRAPH_WIDTH - count + i;
+    uint8_t x2 = x1 + 1;
+
+    // temps[i] can now be positive (A0) or negative (A1) —
+    // midpoint - value handles both directions correctly
+    int y1 = midpoint - static_cast<int>(temps[i] * Y_SCALE);
+    int y2 = midpoint - static_cast<int>(temps[i + 1] * Y_SCALE);
+
+    y1 = constrain(y1, 0, GRAPH_HEIGHT - 1);
+    y2 = constrain(y2, 0, GRAPH_HEIGHT - 1);
+
+    display.drawLine(x1, y1, x2, y2);
   }
 }
 
@@ -120,60 +242,9 @@ void render() {
   display.firstPage();
   do {
 
-    // --- grid drawing ---
-    for (uint8_t i = 0; i <= 8; i++) {
-      for (uint8_t j = 0; j <= 4; j++) {
-        uint8_t x = i * 16;
-        uint8_t y = j * 16;
+    grid();
 
-        if (x == 0 && y == 0){
-          display.drawLine(x, y, x+1, y);
-          display.drawLine(x, y, x, y+1);
-
-          display.drawLine(x + 6, y, x + 9, y);
-          display.drawLine(x, y + 6, x, y + 9);
-
-        } else if (x == 0 ){
-        
-          display.drawLine(x, y-1, x+1, y-1);
-          display.drawLine(x, y-2, x, y);
-
-          display.drawLine(x + 6, y - 1 , x + 9, y -1);
-          display.drawLine(x, y + 5 , x, y + 8);
-        
-        } else if (y == 0){
-
-          display.drawLine(x-2, y, x, y);
-          display.drawLine(x-1, y, x-1, y+1);         
-
-          display.drawLine(x + 5, y, x + 8, y);
-          display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
-        
-        } else {
-          display.drawLine(x - 2, y - 1 , x, y -1);
-          display.drawLine(x - 1, y -2, x - 1 , y);
-
-          display.drawLine(x + 6, y - 1 , x + 9, y -1);
-          display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
-        }
-      }
-    }
-
-    // --- graph drawing ---
-    int count = q.getCount();
-    if (count >= 2) {
-      float temps[GRAPH_WIDTH];
-      for (int i = 0; i < count; i++) {
-        q.peekIdx(&temps[i], i);
-      }
-      for (int i = 0; i < count - 1; i++) {
-        int x1 = GRAPH_WIDTH - count + i;
-        int y1 = GRAPH_HEIGHT - static_cast<int>(temps[i] * Y_SCALE * 10) / 10 - 2;
-        int x2 = GRAPH_WIDTH - count + i + 1;
-        int y2 = GRAPH_HEIGHT - static_cast<int>(temps[i + 1] * Y_SCALE * 10) / 10 - 2;
-        display.drawLine(x1, y1, x2, y2);
-      }
-    }
+    graph2();
 
   } while (display.nextPage());
 }
@@ -206,18 +277,26 @@ void loop() {
   // Generate PWM Signal w/o Blocking Pins 
   gen_signal();
 
-  if (newReadingAvailable)
+  if (newReadingAvailableA0)
   {
       noInterrupts();
-      uint16_t val = latestReading;
-      newReadingAvailable = false;
+      valA0 = latestReadingA0;
+      newReadingAvailableA0 = false;
       interrupts();
-      reading = val * 4.81/ 1023.0;
-      Serial.println(reading);
-  }
+      
+      queue_Control(valA0, valA1);
+    }
 
-  queue_Control(reading);
-  
+  if (newReadingAvailableA1)
+  {
+      noInterrupts();
+      valA1 = latestReadingA1;
+      newReadingAvailableA1 = false;
+      interrupts();
+      
+      queue_Control(valA0, valA1);
+    }
+
   // Build pixel data once, outside the page loop
   render();
 }
