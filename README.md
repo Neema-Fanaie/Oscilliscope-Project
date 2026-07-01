@@ -2,18 +2,18 @@
 
 A DIY digital oscilloscope built on an Arduino Uno, sampling an analog signal and rendering the waveform live on an OLED display.
 
-> This README is a template — fill in the bracketed `[ ]` sections with details specific to your build (wiring, sampling rate, screenshots, etc).
-
 ## Overview
 
-[1–2 sentences describing what the project does — e.g. "This project turns an Arduino Uno into a basic single-channel oscilloscope, sampling an analog input and drawing the waveform in real time on a small OLED screen."]
+[Project Description]
+
+<!-- [1–2 sentences describing what the project does — e.g. "This project turns an Arduino Uno into a basic single-channel oscilloscope, sampling an analog input and drawing the waveform in real time on a small OLED screen."] -->
 
 ## Features
 
 - Real-time waveform display on an OLED screen (via [u8g2](https://github.com/olikraus/u8g2))
 - Circular/sample buffering using the [Queue](https://github.com/Fapitxu/Queue) library
-- [Add: adjustable sample rate / voltage scaling / trigger mode / etc., if implemented]
-- [Add: any input protection / attenuation circuitry, if used]
+<!-- - [Add: adjustable sample rate / voltage scaling / trigger mode / etc., if implemented]
+- [Add: any input protection / attenuation circuitry, if used] -->
 
 ## Hardware Requirements
 
@@ -81,7 +81,7 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 
 ## How It Works
 
-[Briefly describe the sampling/display pipeline, e.g.:]
+<!-- [Briefly describe the sampling/display pipeline, e.g.:] -->
 1. The analog input pin is sampled at a fixed interval using `analogRead()` (or direct ADC register access).
 2. Samples are pushed into a queue/ring buffer to hold a window of the waveform.
 3. The buffered samples are scaled and drawn as a line/pixel plot on the OLED via u8g2.
@@ -89,7 +89,7 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 
 ## Usage
 
-[Describe how to interpret the display, any buttons/controls for scale or trigger, expected input voltage range, etc.]
+<!-- [Describe how to interpret the display, any buttons/controls for scale or trigger, expected input voltage range, etc.] -->
 
 ## Limitations
 
@@ -108,4 +108,4 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 
 ## License
 
-[Add a license, e.g. MIT — currently unspecified]
+<!-- [Add a license, e.g. MIT — currently unspecified] -->
