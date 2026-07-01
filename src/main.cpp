@@ -213,7 +213,7 @@ void graph(){
 
 void graph2() {
   uint8_t count = q.getCount();
-  int8_t midpoint = GRAPH_HEIGHT / 2;
+  uint8_t midpoint = GRAPH_HEIGHT / 2;
 
   if (count < 2) return;
 
