@@ -9,14 +9,19 @@
 // Hardware Interrupts
 volatile uint16_t latestReadingA0 = 0;
 volatile uint16_t latestReadingA1 = 0;
+volatile uint16_t latestReadingA2 = 0;
 volatile bool newReadingAvailableA0 = false;
 volatile bool newReadingAvailableA1 = false;
+volatile bool newReadingAvailableA2 = false;
 
-volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1
+volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1, 2 = A2
+
 
 uint16_t reading_tot = 0;
 uint16_t valA0;
 uint16_t valA1;
+uint16_t valA2;
+
 float reading;
 
 const int PWM_Pin = 7;
@@ -99,11 +104,15 @@ ISR(ADC_vect) {
     if (currentChannel == 0) {
         latestReadingA0 = ADC;
         newReadingAvailableA0 = true;
-        currentChannel = 1; // next tick will sample A1
-    } else {
+        currentChannel = 1; // next tick: A1
+    } else if (currentChannel == 1) {
         latestReadingA1 = ADC;
         newReadingAvailableA1 = true;
-        currentChannel = 0; // next tick will sample A0
+        currentChannel = 2; // next tick: A2
+    } else {
+        latestReadingA2 = ADC;
+        newReadingAvailableA2 = true;
+        currentChannel = 0; // next tick: back to A0
     }
 }
 
@@ -213,7 +222,7 @@ void graph(){
 
 void graph2() {
   uint8_t count = q.getCount();
-  uint8_t midpoint = GRAPH_HEIGHT / 2;
+  uint8_t midpoint = map(valA2, 1023, 0, 0, 63);
 
   if (count < 2) return;
 
@@ -277,8 +286,8 @@ void loop() {
   // Generate PWM Signal w/o Blocking Pins 
   gen_signal();
 
-  if (newReadingAvailableA0)
-  {
+  if (newReadingAvailableA0) {
+
       noInterrupts();
       valA0 = latestReadingA0;
       newReadingAvailableA0 = false;
@@ -287,15 +296,25 @@ void loop() {
       queue_Control(valA0, valA1);
     }
 
-  if (newReadingAvailableA1)
-  {
+  if (newReadingAvailableA1) {
+
       noInterrupts();
       valA1 = latestReadingA1;
       newReadingAvailableA1 = false;
       interrupts();
       
       queue_Control(valA0, valA1);
-    }
+    
+  }
+  
+  if (newReadingAvailableA2) {
+
+    noInterrupts();
+    valA2 = latestReadingA2;
+    newReadingAvailableA2 = false;
+    interrupts();
+    
+  }
 
   // Build pixel data once, outside the page loop
   render();
