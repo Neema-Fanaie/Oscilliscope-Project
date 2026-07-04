@@ -22,15 +22,18 @@ volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1, 2 = A2
 uint16_t valA0;
 uint16_t valA1;
 uint16_t valA2;
+uint16_t filteredA2;
 
 // Button Control
 uint8_t Y_Pointer = 4;
-uint8_t Y_Scale_Values[5] = {1, 2, 4, 8, 10};
+uint8_t Y_Scale_Values[10] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20};
 const unsigned long DEBOUNCE_MS = 500;
-const int Y_MAX_INDEX = 4;
+const int Y_MAX_INDEX = 9;
 
 uint8_t pin2state;  // Pin D2 = DDRD 2
 uint8_t pin3state;  // Pin D3 = DDRD 3
+uint8_t pin4state;  // Pin D4 = DDRD 4
+uint8_t pin5state;  // Pin D5 = DDRD 5
 int prev_time;    
 
 // Display Pins
@@ -69,7 +72,7 @@ void setupTimer1() {
   // Example: prescaler 64, OCR1A = 249 -> 1ms period (1kHz sample rate)
   // Adjust OCR1A for your desired sample interval: OCR1A = 249 by default
   // period(s) = (OCR1A + 1) * prescaler / 16,000,000;
-  OCR1A = 125;
+  OCR1A = 249;
   TCCR1B |= (1 << WGM12);
   TCCR1B |= (1 << CS11) | (1 << CS10);
 
@@ -118,24 +121,27 @@ ISR(ADC_vect) {
 void gen_signal(){
   unsigned long curr_time = millis(); 
   
-  if (curr_time - previous_time >= TIME_HIGH){  // works for both since TIME_HIGH == TIME_LOW
+  if (curr_time - previous_time >= TIME_HIGH){  
     PORTD ^= (1 << PORTD7);  // toggle pin 7
     previous_time = curr_time;
   }
 }
 
-void queue_Control(float valA0, float valA1) {
-  const float ALPHA = 0.9f; 
+void queue_Control(uint16_t rawA0, uint16_t rawA1, bool a0IsNew, bool a1IsNew) {
+  const float ALPHA = 0.9f;
   const float THRESHOLD = 0.25f;
 
   static float filteredA0 = 0.0f;
   static float filteredA1 = 0.0f;
 
-  float readingA0 = valA0 * 4.81f / 1023.0f;
-  float readingA1 = valA1 * 4.81f / 1023.0f;
-
-  filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
-  filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
+  if (a0IsNew) {
+    float readingA0 = rawA0 * 4.81f / 1023.0f;
+    filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
+  }
+  if (a1IsNew) {
+    float readingA1 = rawA1 * 4.81f / 1023.0f;
+    filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
+  }
 
   if (q.isFull()) {
     float discard;
@@ -193,35 +199,19 @@ void grid(){
   }
 }
 
-void graph(){
-  // --- graph drawing ---
-  int count = q.getCount();
-  
-  if (count >= 2) {
-    
-    float temps[GRAPH_WIDTH];
-    
-    for (int i = 0; i < count; i++) {
-      
-      q.peekIdx(&temps[i], i);
-    
-    }
-    
-    for (int i = 0; i < count - 1; i++) {
-      
-      int x1 = GRAPH_WIDTH - count + i;
-      int y1 = GRAPH_HEIGHT - static_cast<int>(temps[i] * Y_SCALE * 10) / 10 - 2;
-      int x2 = GRAPH_WIDTH - count + i + 1;
-      int y2 = GRAPH_HEIGHT - static_cast<int>(temps[i + 1] * Y_SCALE * 10) / 10 - 2;
-      display.drawLine(x1, y1, x2, y2);
-    
-    }
-  }
+uint16_t filterA2(uint16_t rawA2) {
+  const float ALPHA_A2 = 0.6f; 
+
+  static float filteredA2 = 0.0f;
+
+  filteredA2 = ALPHA_A2 * static_cast<float>(rawA2) + (1 - ALPHA_A2) * filteredA2;
+
+  return filteredA2;
 }
 
-void graph2() {
+void graph() {
   uint8_t count = q.getCount();
-  uint8_t midpoint = map(valA2, 1023, 0, 0, 63);
+  uint8_t midpoint = map(filteredA2, 1023, 0, 0, 63);
 
   if (count < 2) return;
 
@@ -235,12 +225,12 @@ void graph2() {
     uint8_t x2 = x1 + 1;
 
     // temps[i] can now be positive (A0) or negative (A1) —
-    // midpoint - value handles both directions correctly
+    // midpoint - value handles both directions accurately
     int y1 = midpoint - static_cast<int>(temps[i] * Y_SCALE);
     int y2 = midpoint - static_cast<int>(temps[i + 1] * Y_SCALE);
 
     y1 = constrain(y1, 0, GRAPH_HEIGHT - 1);
-    y2 = constrain(y2, 0, GRAPH_HEIGHT - 1);
+    y2 = constrain(y2, 0, GRAPH_HEIGHT - 2);
 
     display.drawLine(x1, y1, x2, y2);
   }
@@ -252,7 +242,7 @@ void render() {
 
     grid();
 
-    graph2();
+    graph();
 
   } while (display.nextPage());
 }
@@ -276,21 +266,24 @@ void Scale_Control() {
   Y_SCALE = Y_Scale_Values[Y_Pointer];
 }
 
-void pinStates(){
+void pinStates() {
   pin2state = (PIND >> 2) & 0x01;
   pin3state = (PIND >> 3) & 0x01;
+  pin4state = (PIND >> 4) & 0x01;
+  pin5state = (PIND >> 5) & 0x01;
 }
 
 void setup() {
   Serial.begin(115200);
 
   DDRD |= (1 << DDD7);   // set PD7 (pin 7) as OUTPUT
-  DDRD &= ~((1 << DDD2) | (1 << DDD3)); // set PD2 (pin 2) and PD3 (pin 3) as INPUT
+  DDRD &= ~((1 << DDD2) | (1 << DDD3) | (1 << DDD4) | (1 << DDD5));
 
   setupADC();
   setupTimer1();
 
   previous_time = millis(); // Start time of the program for PWM signal generation
+  prev_time = millis();
 
   // Start Screen
   display.begin();
@@ -300,41 +293,47 @@ void setup() {
 }
 
 void loop() { 
+
   // Generate PWM Signal w/o Blocking Pins 
   gen_signal();
   pinStates();
   Scale_Control();
-  if (newReadingAvailableA0) {
+  
+  bool a0IsNew = false;
+  bool a1IsNew = false;
 
-      noInterrupts();
-      valA0 = latestReadingA0;
-      newReadingAvailableA0 = false;
-      interrupts();
-      
-      queue_Control(valA0, valA1);
-    }
+  if (newReadingAvailableA0) {
+    noInterrupts();
+    valA0 = latestReadingA0;
+    newReadingAvailableA0 = false;
+    interrupts();
+    a0IsNew = true;
+  }
 
   if (newReadingAvailableA1) {
+    noInterrupts();
+    valA1 = latestReadingA1;
+    newReadingAvailableA1 = false;
+    interrupts();
+    a1IsNew = true;
+  }
 
-      noInterrupts();
-      valA1 = latestReadingA1;
-      newReadingAvailableA1 = false;
-      interrupts();
-      
-      queue_Control(valA0, valA1);
-    
+  if (a0IsNew || a1IsNew) {
+    queue_Control(valA0, valA1, a0IsNew, a1IsNew);
   }
   
   if (newReadingAvailableA2) {
-
+    
     noInterrupts();
     valA2 = latestReadingA2;
     newReadingAvailableA2 = false;
     interrupts();
-    
+
+    filteredA2 = filterA2(valA2);
   }
 
   // Build pixel data once, outside the page loop
   render();
-
+  Serial.print("Filtered A2: ");
+  Serial.println(filteredA2);
 }
