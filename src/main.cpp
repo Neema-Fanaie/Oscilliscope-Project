@@ -1,4 +1,5 @@
-#include <cppQueue.h> // Queue Data Structure
+// Queue + Display + Arduino
+#include <cppQueue.h>
 #include <Arduino.h>
 #include <U8g2lib.h>
 
@@ -14,30 +15,32 @@ volatile bool newReadingAvailableA0 = false;
 volatile bool newReadingAvailableA1 = false;
 volatile bool newReadingAvailableA2 = false;
 
+// Selects which channel to read from in the next ADC conversion
 volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1, 2 = A2
 
-
-uint16_t reading_tot = 0;
+// Analog Readings
 uint16_t valA0;
 uint16_t valA1;
 uint16_t valA2;
 
-float reading;
+// Button Control
+uint8_t Y_Pointer = 4;
+uint8_t Y_Scale_Values[5] = {1, 2, 4, 8, 10};
+const unsigned long DEBOUNCE_MS = 500;
+const int Y_MAX_INDEX = 4;
 
-const int PWM_Pin = 7;
-const int Read_Pin = A0;
-const int Width_Pin = A1;
+uint8_t pin2state;  // Pin D2 = DDRD 2
+uint8_t pin3state;  // Pin D3 = DDRD 3
+int prev_time;    
 
-// SPI PINS
-// #define SCK 13
-// #define MOSI 11
+// Display Pins
 #define PIN_RES 8
 #define PIN_DC 9
 #define PIN_CS 10
 
 int GRAPH_WIDTH = 128;
 int GRAPH_HEIGHT = 65;   // adjust to your display height
-int Y_SCALE = 5;        // adjust scaling to fit your temp range
+int Y_SCALE = 10;        // adjust scaling to fit your temp range
 int X_SCALE = 1;
 
 // Screen Details 
@@ -51,77 +54,73 @@ U8G2_SH1106_128X64_NONAME_2_4W_HW_SPI display(U8G2_R0, PIN_CS, PIN_DC, PIN_RES);
 const int TIME_HIGH = 1200;
 const int TIME_LOW = 1200; 
 long previous_time; 
-long current_time;
 bool pin_State = LOW;
 
 // QUEUE + DATA
 cppQueue q(sizeof(float), GRAPH_WIDTH, FIFO);
 
-uint8_t pin2state;
-uint8_t pin3state;
-
 void setupTimer1() {
-    cli();
+  cli();
 
-    TCCR1A = 0;
-    TCCR1B = 0;
-    TCNT1 = 0;
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
 
-    // Example: prescaler 64, OCR1A = 249 -> 1ms period (1kHz sample rate)
-    // Adjust OCR1A for your desired sample interval: OCR1A = 249 by default
-    // period(s) = (OCR1A + 1) * prescaler / 16,000,000;
-    OCR1A = 125;
-    TCCR1B |= (1 << WGM12);
-    TCCR1B |= (1 << CS11) | (1 << CS10);
+  // Example: prescaler 64, OCR1A = 249 -> 1ms period (1kHz sample rate)
+  // Adjust OCR1A for your desired sample interval: OCR1A = 249 by default
+  // period(s) = (OCR1A + 1) * prescaler / 16,000,000;
+  OCR1A = 125;
+  TCCR1B |= (1 << WGM12);
+  TCCR1B |= (1 << CS11) | (1 << CS10);
 
-    // Enable Compare Match A interrupt
-    TIMSK1 |= (1 << OCIE1A);
+  // Enable Compare Match A interrupt
+  TIMSK1 |= (1 << OCIE1A);
 
-    sei();
+  sei();
 }
 
 void setupADC() {
-    // AVcc reference, start on channel A0
-    ADMUX = (1 << REFS0); // channel bits = 0000 -> A0
+  // AVcc reference, start on channel A0
+  ADMUX = (1 << REFS0); // channel bits = 0000 -> A0
 
-    // Enable ADC
-    // Enable ADC interrupt
-    // Prescaler = 16 (1 MHz ADC clock)
-    ADCSRA =
-        (1 << ADEN) |
-        (1 << ADIE) |
-        (1 << ADPS2);
+  // Enable ADC
+  // Enable ADC interrupt
+  // Prescaler = 16 (1 MHz ADC clock)
+  ADCSRA =
+      (1 << ADEN) |
+      (1 << ADIE) |
+      (1 << ADPS2);
 }
 
 // Timer1 fires every 1 ms
 ISR(TIMER1_COMPA_vect) {
-    // Select the channel to sample this tick, then start conversion
-    ADMUX = (ADMUX & 0xF0) | (currentChannel & 0x0F); // keep REFS bits, set MUX bits
-    ADCSRA |= (1 << ADSC);
+  // Select the channel to sample this tick, then start conversion
+  ADMUX = (ADMUX & 0xF0) | (currentChannel & 0x0F); // keep REFS bits, set MUX bits
+  ADCSRA |= (1 << ADSC);
 }
 
 ISR(ADC_vect) {
-    if (currentChannel == 0) {
-        latestReadingA0 = ADC;
-        newReadingAvailableA0 = true;
-        currentChannel = 1; // next tick: A1
-    } else if (currentChannel == 1) {
-        latestReadingA1 = ADC;
-        newReadingAvailableA1 = true;
-        currentChannel = 2; // next tick: A2
-    } else {
-        latestReadingA2 = ADC;
-        newReadingAvailableA2 = true;
-        currentChannel = 0; // next tick: back to A0
-    }
+  if (currentChannel == 0) {
+    latestReadingA0 = ADC;
+    newReadingAvailableA0 = true;
+    currentChannel = 1; // next tick: A1
+  } else if (currentChannel == 1) {
+    latestReadingA1 = ADC;
+    newReadingAvailableA1 = true;
+    currentChannel = 2; // next tick: A2
+  } else {
+    latestReadingA2 = ADC;
+    newReadingAvailableA2 = true;
+    currentChannel = 0; // next tick: back to A0
+  }
 }
 
 void gen_signal(){
-  current_time = millis();
+  unsigned long curr_time = millis(); 
   
-  if (current_time - previous_time >= TIME_HIGH){  // works for both since TIME_HIGH == TIME_LOW
+  if (curr_time - previous_time >= TIME_HIGH){  // works for both since TIME_HIGH == TIME_LOW
     PORTD ^= (1 << PORTD7);  // toggle pin 7
-    previous_time = current_time;
+    previous_time = curr_time;
   }
 }
 
@@ -258,6 +257,25 @@ void render() {
   } while (display.nextPage());
 }
 
+void Scale_Control() {
+  if (pin2state == 0 && pin3state == 0) return; 
+
+  unsigned long curr_time = millis();
+  
+  if (curr_time - prev_time <= DEBOUNCE_MS) return;
+
+  if (pin2state == 1 && Y_Pointer < Y_MAX_INDEX) {
+    Y_Pointer++;
+  } else if (pin3state == 1 && Y_Pointer > 0) {
+    Y_Pointer--;
+  } else {
+    return;
+  }
+
+  prev_time = curr_time;
+  Y_SCALE = Y_Scale_Values[Y_Pointer];
+}
+
 void pinStates(){
   pin2state = (PIND >> 2) & 0x01;
   pin3state = (PIND >> 3) & 0x01;
@@ -272,8 +290,7 @@ void setup() {
   setupADC();
   setupTimer1();
 
-  // Initial time
-  current_time = millis();
+  previous_time = millis(); // Start time of the program for PWM signal generation
 
   // Start Screen
   display.begin();
@@ -285,7 +302,8 @@ void setup() {
 void loop() { 
   // Generate PWM Signal w/o Blocking Pins 
   gen_signal();
-
+  pinStates();
+  Scale_Control();
   if (newReadingAvailableA0) {
 
       noInterrupts();
@@ -318,4 +336,5 @@ void loop() {
 
   // Build pixel data once, outside the page loop
   render();
+
 }
