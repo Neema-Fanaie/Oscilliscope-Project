@@ -26,20 +26,28 @@ uint16_t filteredA2;
 
 // * ================ All Button Control Related Variables ================ * //
 // Scale Settings on Startup
-int Y_SCALE = 10;
-int X_SCALE = 1;
+uint16_t Y_SCALE = 10;
+uint16_t X_SCALE = 1;
 
 // Button Control
 uint8_t Y_Pointer = 4;
-uint8_t Y_Scale_Values[10] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20};
-const uint16_t coolDownTime = 500; // Control the coolDownTime time for button presses
 const int Y_MAX_INDEX = 9;
+uint8_t Y_Scale_Values[10] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20};
+
+const uint16_t cooldown_Time = 500; // Control the coolDownTime time for button presses
+const uint16_t debounce_Time = 50; // Control the debounce time for button presses
 
 uint8_t pin2state;  // Pin D2 = DDRD 2
 uint8_t pin3state;  // Pin D3 = DDRD 3
 uint8_t pin4state;  // Pin D4 = DDRD 4
 uint8_t pin5state;  // Pin D5 = DDRD 5
 unsigned long prev_time;    
+
+// Debounce tracking - one set per pin
+uint8_t pin2lastReading = LOW;
+uint8_t pin3lastReading = LOW;
+unsigned long pin2highSince = 0;
+unsigned long pin3highSince = 0;
 
 // * ========================= Screen Variables ========================= * //
 // SPI Pin Assigments
@@ -78,30 +86,29 @@ float ringPeek(uint16_t idx) {
 }
 
 void queue_Control(uint16_t rawA0, uint16_t rawA1, bool a0IsNew, bool a1IsNew) {
-  const float ALPHA = 0.9f;
   const float THRESHOLD = 0.25f;
-
-  static float filteredA0 = 0.0f;
-  static float filteredA1 = 0.0f;
   static float value = 0.0f;
 
+  static float readingA0;
+  static float readingA1;
+
   if (a0IsNew) {
-    float readingA0 = rawA0 * 4.81f / 1023.0f;
-    filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
+    readingA0 = rawA0 * 4.81f / 1023.0f;
   }
   if (a1IsNew) {
-    float readingA1 = rawA1 * 4.81f / 1023.0f;
-    filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
+    readingA1 = rawA1 * 4.81f / 1023.0f;
   }
 
-  if (filteredA0 >= THRESHOLD) {
-    value = filteredA0;
-  } else if (filteredA1 >= THRESHOLD) {
-    value = -filteredA1;
-  }  
-  
-  ringPush(value);
+  if (readingA0 >= THRESHOLD) {
+    value = readingA0;
+  } else if (readingA1 >= THRESHOLD) {
+    value = -readingA1;
+  }  else {
+    value = 0.0f;
+  }
 
+  Serial.println(value);
+  ringPush(value);
 }
 
 // * ========================= ADC Functions for Interrupts ========================= * //
@@ -192,6 +199,54 @@ uint16_t filterA2(uint16_t rawA2) {
   filteredA2 = ALPHA_A2 * static_cast<float>(rawA2) + (1 - ALPHA_A2) * filteredA2;
 
   return filteredA2;
+}
+
+//* ========================= Button Control Functions ========================= * //
+void pinStates() {
+  pin2state = (PIND >> 2) & 0x01;
+  pin3state = (PIND >> 3) & 0x01;
+  pin4state = (PIND >> 4) & 0x01;
+  pin5state = (PIND >> 5) & 0x01;
+}
+
+bool debounce(uint8_t rawReading, uint8_t &lastReading, unsigned long &highSince) {
+  unsigned long now = millis();
+
+  if (rawReading == HIGH) {
+    if (lastReading == LOW) {
+      highSince = now; // just went HIGH, start timing
+    }
+    lastReading = HIGH;
+    return (now - highSince) >= debounce_Time;
+  } else {
+    lastReading = LOW;
+    return false;
+  }
+}
+
+void Y_Scale_Control() {
+  bool pin2debounced = debounce(pin2state, pin2lastReading, pin2highSince);
+  bool pin3debounced = debounce(pin3state, pin3lastReading, pin3highSince);
+
+  if (!pin2debounced && !pin3debounced) return;
+
+  unsigned long curr_time = millis();
+  if (curr_time - prev_time <= cooldown_Time) return; // Cooldown check
+
+  if (pin2debounced && Y_Pointer < Y_MAX_INDEX) {
+    Y_Pointer++;
+  } else if (pin3debounced && Y_Pointer > 0) {
+    Y_Pointer--;
+  } else {
+    return;
+  }
+
+  prev_time = curr_time;
+  Y_SCALE = Y_Scale_Values[Y_Pointer];
+}
+
+void X_Scale_Control() {
+  ;
 }
 
 //* ========================= Graphing Functions ========================= * //
@@ -288,37 +343,6 @@ void render() {
   } while (display.nextPage());
 }
 
-//* ========================= Button Control Functions ========================= * //
-void pinStates() {
-  pin2state = (PIND >> 2) & 0x01;
-  pin3state = (PIND >> 3) & 0x01;
-  pin4state = (PIND >> 4) & 0x01;
-  pin5state = (PIND >> 5) & 0x01;
-}
-
-void Y_Scale_Control() {
-  if (pin2state == 0 && pin3state == 0) return; 
-
-  unsigned long curr_time = millis();
-  
-  if (curr_time - prev_time <= coolDownTime) return;
-
-  if (pin2state == 1 && Y_Pointer < Y_MAX_INDEX) {
-    Y_Pointer++;
-  } else if (pin3state == 1 && Y_Pointer > 0) {
-    Y_Pointer--;
-  } else {
-    return;
-  }
-
-  prev_time = curr_time;
-  Y_SCALE = Y_Scale_Values[Y_Pointer];
-}
-
-void X_Scale_Control() {
-  ;
-}
-
 // * ======================== Setup and Loop ========================= * //
 void setup() {
   Serial.begin(115200);
@@ -388,5 +412,4 @@ void loop() {
 
   // Build pixel data once, outside the page loop
   render();
-
 }
