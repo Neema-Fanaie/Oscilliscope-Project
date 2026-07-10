@@ -1,5 +1,4 @@
-// Queue + Display + Arduino
-#include <cppQueue.h>
+// Display + Arduino
 #include <Arduino.h>
 #include <U8g2lib.h>
 
@@ -7,6 +6,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
+// * ============== All Analog Variables and Related Setup ============== * //
 // Hardware Interrupts
 volatile uint16_t latestReadingA0 = 0;
 volatile uint16_t latestReadingA1 = 0;
@@ -24,44 +24,87 @@ uint16_t valA1;
 uint16_t valA2;
 uint16_t filteredA2;
 
+// * ================ All Button Control Related Variables ================ * //
+// Scale Settings on Startup
+int Y_SCALE = 10;
+int X_SCALE = 1;
+
 // Button Control
 uint8_t Y_Pointer = 4;
 uint8_t Y_Scale_Values[10] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20};
-const unsigned long DEBOUNCE_MS = 500;
+const uint16_t coolDownTime = 500; // Control the coolDownTime time for button presses
 const int Y_MAX_INDEX = 9;
 
 uint8_t pin2state;  // Pin D2 = DDRD 2
 uint8_t pin3state;  // Pin D3 = DDRD 3
 uint8_t pin4state;  // Pin D4 = DDRD 4
 uint8_t pin5state;  // Pin D5 = DDRD 5
-int prev_time;    
+unsigned long prev_time;    
 
-// Display Pins
-#define PIN_RES 8
-#define PIN_DC 9
-#define PIN_CS 10
-
-int GRAPH_WIDTH = 128;
-int GRAPH_HEIGHT = 65;   // adjust to your display height
-int Y_SCALE = 10;        // adjust scaling to fit your temp range
-int X_SCALE = 1;
+// * ========================= Screen Variables ========================= * //
+// SPI Pin Assigments
+const uint8_t PIN_RES = 8;
+const uint8_t PIN_DC = 9;
+const uint8_t PIN_CS = 10;
 
 // Screen Details 
-const int SCREEN_WIDTH = 128;
-const int SCREEN_HEIGHT = 64;
+constexpr uint8_t  GRAPH_WIDTH = 128;
+constexpr uint8_t  GRAPH_HEIGHT = 64;   
 
-// SCREEN
+// Screen Initialisation from U8g2lib.h
 U8G2_SH1106_128X64_NONAME_2_4W_HW_SPI display(U8G2_R0, PIN_CS, PIN_DC, PIN_RES);
 
-// PWM 
+//TODO: Irrelevant to the main logic, Remove when finished project
 const int TIME_HIGH = 1200;
 const int TIME_LOW = 1200; 
 long previous_time; 
 bool pin_State = LOW;
 
-// QUEUE + DATA
-cppQueue q(sizeof(float), GRAPH_WIDTH, FIFO);
+// * ========================= Queue Variables  & Functions ========================= * //
+float ringBuf[GRAPH_WIDTH] = {0};
+uint16_t ringHead = 0;   // next write position
+uint16_t ringCount = 0;  // number of valid entries
 
+void ringPush(float v) {
+  ringBuf[ringHead] = v;
+  ringHead = (ringHead + 1) % GRAPH_WIDTH;
+  if (ringCount < GRAPH_WIDTH) ringCount++;
+}
+
+// idx 0 = oldest, idx (count-1) = newest
+float ringPeek(uint16_t idx) {
+  uint16_t start = (ringHead + GRAPH_WIDTH - ringCount) % GRAPH_WIDTH;
+  return ringBuf[(start + idx) % GRAPH_WIDTH];
+}
+
+void queue_Control(uint16_t rawA0, uint16_t rawA1, bool a0IsNew, bool a1IsNew) {
+  const float ALPHA = 0.9f;
+  const float THRESHOLD = 0.25f;
+
+  static float filteredA0 = 0.0f;
+  static float filteredA1 = 0.0f;
+  static float value = 0.0f;
+
+  if (a0IsNew) {
+    float readingA0 = rawA0 * 4.81f / 1023.0f;
+    filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
+  }
+  if (a1IsNew) {
+    float readingA1 = rawA1 * 4.81f / 1023.0f;
+    filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
+  }
+
+  if (filteredA0 >= THRESHOLD) {
+    value = filteredA0;
+  } else if (filteredA1 >= THRESHOLD) {
+    value = -filteredA1;
+  }  
+  
+  ringPush(value);
+
+}
+
+// * ========================= ADC Functions for Interrupts ========================= * //
 void setupTimer1() {
   cli();
 
@@ -83,41 +126,54 @@ void setupTimer1() {
 }
 
 void setupADC() {
+
   // AVcc reference, start on channel A0
   ADMUX = (1 << REFS0); // channel bits = 0000 -> A0
 
   // Enable ADC
   // Enable ADC interrupt
   // Prescaler = 16 (1 MHz ADC clock)
+
   ADCSRA =
-      (1 << ADEN) |
-      (1 << ADIE) |
-      (1 << ADPS2);
+    (1 << ADEN) |
+    (1 << ADIE) |
+    (1 << ADPS2);
+
 }
 
 // Timer1 fires every 1 ms
 ISR(TIMER1_COMPA_vect) {
   // Select the channel to sample this tick, then start conversion
+  
   ADMUX = (ADMUX & 0xF0) | (currentChannel & 0x0F); // keep REFS bits, set MUX bits
   ADCSRA |= (1 << ADSC);
+
 }
 
 ISR(ADC_vect) {
+  
   if (currentChannel == 0) {
+  
     latestReadingA0 = ADC;
     newReadingAvailableA0 = true;
     currentChannel = 1; // next tick: A1
+  
   } else if (currentChannel == 1) {
+  
     latestReadingA1 = ADC;
     newReadingAvailableA1 = true;
     currentChannel = 2; // next tick: A2
+  
   } else {
+  
     latestReadingA2 = ADC;
     newReadingAvailableA2 = true;
     currentChannel = 0; // next tick: back to A0
+  
   }
 }
 
+//TODO: Irrelevant to the main logic, Remove when finished project
 void gen_signal(){
   unsigned long curr_time = millis(); 
   
@@ -127,45 +183,29 @@ void gen_signal(){
   }
 }
 
-void queue_Control(uint16_t rawA0, uint16_t rawA1, bool a0IsNew, bool a1IsNew) {
-  const float ALPHA = 0.9f;
-  const float THRESHOLD = 0.25f;
+// ========================== Filter A2 Readings for Midpoint Line ========================= //
+uint16_t filterA2(uint16_t rawA2) {
+  const float ALPHA_A2 = 0.2f; 
 
-  static float filteredA0 = 0.0f;
-  static float filteredA1 = 0.0f;
+  static float filteredA2 = 0.0f;
 
-  if (a0IsNew) {
-    float readingA0 = rawA0 * 4.81f / 1023.0f;
-    filteredA0 = ALPHA * readingA0 + (1 - ALPHA) * filteredA0;
-  }
-  if (a1IsNew) {
-    float readingA1 = rawA1 * 4.81f / 1023.0f;
-    filteredA1 = ALPHA * readingA1 + (1 - ALPHA) * filteredA1;
-  }
+  filteredA2 = ALPHA_A2 * static_cast<float>(rawA2) + (1 - ALPHA_A2) * filteredA2;
 
-  if (q.isFull()) {
-    float discard;
-    q.pop(&discard);
-  }
-
-  float value = 0.0f;
-  if (filteredA0 >= THRESHOLD) {
-    value = filteredA0;
-  } else if (filteredA1 >= THRESHOLD) {
-    value = -filteredA1;
-  }
-
-  q.push(&value);
+  return filteredA2;
 }
 
+//* ========================= Graphing Functions ========================= * //
+// ? Creates a background grid for the graph to be drawn on, maybe remove later
 void grid(){
-// --- grid drawing ---
-  for (uint8_t i = 0; i <= 8; i++) {
-    for (uint8_t j = 0; j <= 4; j++) {
-      uint8_t x = i * 16;
-      uint8_t y = j * 16;
+
+  for (uint16_t i = 0; i <= 8; i++) {
+    for (uint16_t j = 0; j <= 4; j++) {
+      
+      uint16_t x = i * 16;
+      uint16_t y = j * 16;
 
       if (x == 0 && y == 0){
+        
         display.drawLine(x, y, x+1, y);
         display.drawLine(x, y, x, y+1);
 
@@ -189,6 +229,7 @@ void grid(){
         display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
       
       } else {
+        
         display.drawLine(x - 2, y - 1 , x, y -1);
         display.drawLine(x - 1, y -2, x - 1 , y);
 
@@ -199,43 +240,43 @@ void grid(){
   }
 }
 
-uint16_t filterA2(uint16_t rawA2) {
-  const float ALPHA_A2 = 0.6f; 
-
-  static float filteredA2 = 0.0f;
-
-  filteredA2 = ALPHA_A2 * static_cast<float>(rawA2) + (1 - ALPHA_A2) * filteredA2;
-
-  return filteredA2;
-}
-
+// Draws the Graph using filtered readings from A0 and A1
 void graph() {
-  uint8_t count = q.getCount();
-  uint8_t midpoint = map(filteredA2, 1023, 0, 0, 63);
 
-  if (count < 2) return;
+  // Read from A2 - Determine the midpoint for the graph
+  noInterrupts();
+  uint16_t a2 = latestReadingA2;
+  interrupts();
+  uint16_t midpoint = map(filterA2(a2), 1023, 0, 0, 63);
+
 
   float temps[GRAPH_WIDTH];
-  for (uint8_t i = 0; i < count; i++) {
-    q.peekIdx(&temps[i], i);
-  }
+  uint16_t count = ringCount;
+  
+  if (count < 2) return; // Don't want too few readings
 
-  for (uint8_t i = 0; i < count - 1; i++) {
-    uint8_t x1 = GRAPH_WIDTH - count + i;
-    uint8_t x2 = x1 + 1;
+  for (uint16_t i = 0; i < count; i++) {
+    temps[i] = ringPeek(i); // Read all values in Queue until now
+  }
+  
+  // Graph it from midpoint, constained to fit in screen, like a real oscilloscope
+  for (uint16_t i = 0; i < count - 1; i++) {
+    uint16_t x1 = GRAPH_WIDTH - count + i;
+    uint16_t x2 = x1 + 1;
 
     // temps[i] can now be positive (A0) or negative (A1) —
     // midpoint - value handles both directions accurately
     int y1 = midpoint - static_cast<int>(temps[i] * Y_SCALE);
     int y2 = midpoint - static_cast<int>(temps[i + 1] * Y_SCALE);
 
-    y1 = constrain(y1, 0, GRAPH_HEIGHT - 1);
-    y2 = constrain(y2, 0, GRAPH_HEIGHT - 2);
+    y1 = constrain(y1, 0, GRAPH_HEIGHT);
+    y2 = constrain(y2, 0, GRAPH_HEIGHT - 1);
 
     display.drawLine(x1, y1, x2, y2);
   }
 }
 
+// Render calls grid() and graph() to draw screen easily
 void render() {
   display.firstPage();
   do {
@@ -247,12 +288,20 @@ void render() {
   } while (display.nextPage());
 }
 
-void Scale_Control() {
+//* ========================= Button Control Functions ========================= * //
+void pinStates() {
+  pin2state = (PIND >> 2) & 0x01;
+  pin3state = (PIND >> 3) & 0x01;
+  pin4state = (PIND >> 4) & 0x01;
+  pin5state = (PIND >> 5) & 0x01;
+}
+
+void Y_Scale_Control() {
   if (pin2state == 0 && pin3state == 0) return; 
 
   unsigned long curr_time = millis();
   
-  if (curr_time - prev_time <= DEBOUNCE_MS) return;
+  if (curr_time - prev_time <= coolDownTime) return;
 
   if (pin2state == 1 && Y_Pointer < Y_MAX_INDEX) {
     Y_Pointer++;
@@ -266,13 +315,11 @@ void Scale_Control() {
   Y_SCALE = Y_Scale_Values[Y_Pointer];
 }
 
-void pinStates() {
-  pin2state = (PIND >> 2) & 0x01;
-  pin3state = (PIND >> 3) & 0x01;
-  pin4state = (PIND >> 4) & 0x01;
-  pin5state = (PIND >> 5) & 0x01;
+void X_Scale_Control() {
+  ;
 }
 
+// * ======================== Setup and Loop ========================= * //
 void setup() {
   Serial.begin(115200);
 
@@ -294,20 +341,26 @@ void setup() {
 
 void loop() { 
 
-  // Generate PWM Signal w/o Blocking Pins 
-  gen_signal();
+  gen_signal();   // Generate PWM Signal w/o Blocking Pins 
+
+  // Button Control for Y and X Scale, and Pin State Detection
   pinStates();
-  Scale_Control();
-  
+  Y_Scale_Control();
+  X_Scale_Control();
+
+
+  // Reading Control for A0, A1, and Queue Control for Graphing
   bool a0IsNew = false;
   bool a1IsNew = false;
 
   if (newReadingAvailableA0) {
+
     noInterrupts();
     valA0 = latestReadingA0;
     newReadingAvailableA0 = false;
     interrupts();
     a0IsNew = true;
+  
   }
 
   if (newReadingAvailableA1) {
@@ -322,6 +375,7 @@ void loop() {
     queue_Control(valA0, valA1, a0IsNew, a1IsNew);
   }
   
+  // Reading Control for A2
   if (newReadingAvailableA2) {
     
     noInterrupts();
@@ -334,6 +388,5 @@ void loop() {
 
   // Build pixel data once, outside the page loop
   render();
-  Serial.print("Filtered A2: ");
-  Serial.println(filteredA2);
+
 }
