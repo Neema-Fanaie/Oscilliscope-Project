@@ -5,3 +5,4 @@
 .vscode/ipch
 lib/Servo
 lib/Grid.cpp
+Oscilliscope-Board
