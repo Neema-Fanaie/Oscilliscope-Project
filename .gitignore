@@ -4,6 +4,4 @@
 .vscode/launch.json
 .vscode/ipch
 lib/Servo
-.Oscilloscope Project/lib/Servo
-.Oscilloscope Project/lib/Grid.cpp
-
+lib/Grid.cpp
