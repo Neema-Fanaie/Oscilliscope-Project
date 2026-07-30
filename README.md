@@ -10,20 +10,33 @@ A DIY digital oscilloscope built on an Arduino Uno, sampling an analog signal an
 
 ## Features
 
-- Real-time waveform display on an OLED screen (via [u8g2](https://github.com/olikraus/u8g2))
-- Circular/sample buffering using the [Queue](https://github.com/Fapitxu/Queue) library
+- Real-time Waveform Display on an OLED Screen (via [u8g2](https://github.com/olikraus/u8g2))
+- Circular/Sample Buffering
+
 <!-- - [Add: adjustable sample rate / voltage scaling / trigger mode / etc., if implemented]
 - [Add: any input protection / attenuation circuitry, if used] -->
 
 ## Hardware Requirements
 
 | Component | Notes |
-|---|---|
-| Arduino Uno | Or compatible ATmega328P board |
-| OLED display | SSD1306/SH1106-class display compatible with u8g2 |
-| [Probe / input circuitry] | [e.g. voltage divider, op-amp buffer, protection diodes] |
-| Breadboard + jumper wires | |
-| [USB cable] | For programming and serial power |
+1. Sensing:
+- OpAmp: MCP 6272, Contains 2 OpAmps which can accuratly rectify signal without error
+- 4x 1N4148 diodes, 4x 10k resistors, 2x 1k resistors, 1x 10nF capacitor near the OpAmp Supply and 1x10μF capacitor near Power Supply Source (Manufactorer's recommended values for MCP6272)
+
+2. External Components:
+- Arduino Uno or compatible ATmega328P board and USB cable for Programming
+- 4x Push buttons for User Input (optional, used in scaling)
+- 4x 10k resistors for Pull-down on Push Buttons
+- Potentiometer for moving reference point on screen (optional)
+- OLED display | SSD1306/SH1106-class display compatible with u8g2 |
+- Breadboard and Jumper Wires for Prototyping
+
+3. Power Supply:
+- 9V source for OpAmp and Arduino
+- LM2931az voltage regulator to provide 5V for OLED, Buttons and Potentiometer
+
+Limitations: The Arduino Uno's ADC is limited to 10-bit resolution and a maximum sampling rate of ~10 kHz (practical limit due to processing overhead). Input voltage should be within 0–5V unless external circuitry is used for scaling.
+Hardware limitations: OpAmp begins to fail at 15kHz on the rising edge of the signal, but can be usale up to 20kHz. Maybe experiment with different opamps and mcs to get better results.
 
 ### Wiring
 
@@ -99,7 +112,6 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 ## Roadmap / Possible Improvements
 
 - [ ] [e.g. Add trigger functionality]
-- [ ] [e.g. Add adjustable time/voltage scale]
 - [ ] [e.g. Support multiple channels]
 
 ## Author

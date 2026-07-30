@@ -18,21 +18,21 @@ volatile bool newReadingAvailableA2 = false;
 // Selects which channel to read from in the next ADC conversion
 volatile uint8_t currentChannel = 0; // 0 = A0, 1 = A1, 2 = A2
 
-// Analog Readings
-uint16_t valA0;
-uint16_t valA1;
-uint16_t valA2;
-uint16_t filteredA2;
 
 // * ================ All Button Control Related Variables ================ * //
-// Scale Settings on Startup
-uint16_t Y_SCALE = 10;
-uint16_t X_SCALE = 1;
+uint8_t Y_Pointer = 2;
+uint8_t Y_Scale_Values[15] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+uint16_t Y_SCALE = Y_Scale_Values[Y_Pointer];
+const int Y_MAX_INDEX = 14;
 
-// Button Control
-uint8_t Y_Pointer = 4;
-const int Y_MAX_INDEX = 9;
-uint8_t Y_Scale_Values[10] = {1, 2, 4, 8, 10, 12, 14, 16, 18, 20};
+uint8_t X_Pointer = 2;
+uint16_t X_Scale_Values[15] = {1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 65, 100, 150, 220, 300};
+uint16_t X_SCALE = X_Scale_Values[X_Pointer];
+const int X_MAX_INDEX = 14;
+
+volatile uint16_t X_DECIMATION = 1;   // current averaging factor, set from X_SCALE
+volatile float    accumSum = 0.0f;    // running sum of raw combined samples
+volatile uint16_t accumCount = 0;     // how many raw samples summed so far
 
 const uint16_t cooldown_Time = 500; // Control the coolDownTime time for button presses
 const uint16_t debounce_Time = 50; // Control the debounce time for button presses
@@ -41,13 +41,18 @@ uint8_t pin2state;  // Pin D2 = DDRD 2
 uint8_t pin3state;  // Pin D3 = DDRD 3
 uint8_t pin4state;  // Pin D4 = DDRD 4
 uint8_t pin5state;  // Pin D5 = DDRD 5
-unsigned long prev_time;    
+unsigned long prev_time_Y;    
+unsigned long prev_time_X;
 
 // Debounce tracking - one set per pin
 uint8_t pin2lastReading = LOW;
 uint8_t pin3lastReading = LOW;
+uint8_t pin4lastReading = LOW;
+uint8_t pin5lastReading = LOW;
 unsigned long pin2highSince = 0;
 unsigned long pin3highSince = 0;
+unsigned long pin4highSince = 0;
+unsigned long pin5highSince = 0;
 
 // * ========================= Screen Variables ========================= * //
 // SPI Pin Assigments
@@ -70,8 +75,8 @@ bool pin_State = LOW;
 
 // * ========================= Queue Variables  & Functions ========================= * //
 float ringBuf[GRAPH_WIDTH] = {0};
-uint16_t ringHead = 0;   // next write position
-uint16_t ringCount = 0;  // number of valid entries
+volatile uint16_t ringHead = 0;   // next write position
+volatile uint16_t ringCount = 0;  // number of valid entries
 
 void ringPush(float v) {
   ringBuf[ringHead] = v;
@@ -85,108 +90,86 @@ float ringPeek(uint16_t idx) {
   return ringBuf[(start + idx) % GRAPH_WIDTH];
 }
 
-void queue_Control(uint16_t rawA0, uint16_t rawA1, bool a0IsNew, bool a1IsNew) {
-  const float THRESHOLD = 0.25f;
-  static float value = 0.0f;
+void queue_Control(uint16_t rawA0, uint16_t rawA1) {
+  const float THRESHOLD = 0.05f;
+  float value;
 
-  static float readingA0;
-  static float readingA1;
-
-  if (a0IsNew) {
-    readingA0 = rawA0 * 4.81f / 1023.0f;
-  }
-  if (a1IsNew) {
-    readingA1 = rawA1 * 4.81f / 1023.0f;
-  }
+  float readingA0 = rawA0 * 5.000f / 1023.0f;
+  float readingA1 = rawA1 * 5.000f / 1023.0f;
 
   if (readingA0 >= THRESHOLD) {
     value = readingA0;
   } else if (readingA1 >= THRESHOLD) {
     value = -readingA1;
-  }  else {
+  } else {
     value = 0.0f;
   }
 
-  Serial.println(value);
-  ringPush(value);
+  accumSum += value;
+  accumCount++;
+
+  if (accumCount >= X_DECIMATION) {
+    ringPush(accumSum / accumCount);   // average, not raw — this is the anti-alias step
+    accumSum = 0.0f;
+    accumCount = 0;
+  }
 }
 
 // * ========================= ADC Functions for Interrupts ========================= * //
 void setupTimer1() {
-  cli();
+  cli();//stop interrupts
 
+  // Initiate Registers at 0
   TCCR1A = 0;
   TCCR1B = 0;
-  TCNT1 = 0;
+  TCNT1  = 0;
 
-  // Example: prescaler 64, OCR1A = 249 -> 1ms period (1kHz sample rate)
-  // Adjust OCR1A for your desired sample interval: OCR1A = 249 by default
-  // period(s) = (OCR1A + 1) * prescaler / 16,000,000;
-  OCR1A = 249;
-  TCCR1B |= (1 << WGM12);
-  TCCR1B |= (1 << CS11) | (1 << CS10);
-
-  // Enable Compare Match A interrupt
+  OCR1A = 249; // starting freq, e.g. 5Hz
+  TCCR1B |= (1 << WGM12);   // CTC mode
+  TCCR1B |= (1 << CS12);    // prescaler 256 (CS12=1, CS11=0, CS10=0)
   TIMSK1 |= (1 << OCIE1A);
 
-  sei();
+
+  sei();//allow interrupts
 }
 
 void setupADC() {
-
-  // AVcc reference, start on channel A0
-  ADMUX = (1 << REFS0); // channel bits = 0000 -> A0
-
-  // Enable ADC
-  // Enable ADC interrupt
-  // Prescaler = 16 (1 MHz ADC clock)
-
+  ADMUX = (1 << REFS0); // AVcc reference, start on channel A0 (MUX bits = 0000)
   ADCSRA =
-    (1 << ADEN) |
-    (1 << ADIE) |
-    (1 << ADPS2);
-
+    (1 << ADEN) |   // enable ADC
+    (1 << ADIE) |   // enable ADC interrupt
+    (1 << ADPS2);   // prescaler 16 -> 1 MHz ADC clock
 }
 
-// Timer1 fires every 1 ms
 ISR(TIMER1_COMPA_vect) {
-  // Select the channel to sample this tick, then start conversion
-  
-  ADMUX = (ADMUX & 0xF0) | (currentChannel & 0x0F); // keep REFS bits, set MUX bits
-  ADCSRA |= (1 << ADSC);
-
+  currentChannel = 0;
+  ADMUX = (ADMUX & 0xF0) | currentChannel; // select A0
+  ADCSRA |= (1 << ADSC);                    // start conversion
 }
 
 ISR(ADC_vect) {
-  
-  if (currentChannel == 0) {
-  
-    latestReadingA0 = ADC;
-    newReadingAvailableA0 = true;
-    currentChannel = 1; // next tick: A1
-  
-  } else if (currentChannel == 1) {
-  
-    latestReadingA1 = ADC;
-    newReadingAvailableA1 = true;
-    currentChannel = 2; // next tick: A2
-  
-  } else {
-  
-    latestReadingA2 = ADC;
-    newReadingAvailableA2 = true;
-    currentChannel = 0; // next tick: back to A0
-  
-  }
-}
+  uint16_t result = ADC;
 
-//TODO: Irrelevant to the main logic, Remove when finished project
-void gen_signal(){
-  unsigned long curr_time = millis(); 
-  
-  if (curr_time - previous_time >= TIME_HIGH){  
-    PORTD ^= (1 << PORTD7);  // toggle pin 7
-    previous_time = curr_time;
+  switch (currentChannel) {
+    case 0:
+      latestReadingA0 = result;
+      currentChannel = 1;
+      ADMUX = (ADMUX & 0xF0) | currentChannel; // select A1
+      ADCSRA |= (1 << ADSC);                    // start next conversion
+      break;
+
+    case 1:
+      latestReadingA1 = result;
+      currentChannel = 2;
+      ADMUX = (ADMUX & 0xF0) | currentChannel; // select A2
+      ADCSRA |= (1 << ADSC);                    // start next conversion
+      break;
+
+    case 2:
+      latestReadingA2 = result;
+      queue_Control(latestReadingA0, latestReadingA1); // full round done
+      // don't restart ADSC here — wait for next Timer1 tick
+      break;
   }
 }
 
@@ -231,7 +214,7 @@ void Y_Scale_Control() {
   if (!pin2debounced && !pin3debounced) return;
 
   unsigned long curr_time = millis();
-  if (curr_time - prev_time <= cooldown_Time) return; // Cooldown check
+  if (curr_time - prev_time_Y <= cooldown_Time) return; // Cooldown check
 
   if (pin2debounced && Y_Pointer < Y_MAX_INDEX) {
     Y_Pointer++;
@@ -241,59 +224,39 @@ void Y_Scale_Control() {
     return;
   }
 
-  prev_time = curr_time;
+  prev_time_Y = curr_time;
   Y_SCALE = Y_Scale_Values[Y_Pointer];
 }
 
 void X_Scale_Control() {
-  ;
+  bool pin4debounced = debounce(pin4state, pin4lastReading, pin4highSince);
+  bool pin5debounced = debounce(pin5state, pin5lastReading, pin5highSince);
+
+  if (!pin4debounced && !pin5debounced) return;
+
+  unsigned long curr_time = millis();
+  if (curr_time - prev_time_X <= cooldown_Time) return;
+
+  if (pin4debounced && X_Pointer < X_MAX_INDEX) {
+    X_Pointer++;
+  } else if (pin5debounced && X_Pointer > 0) {
+    X_Pointer--;
+  } else {
+    return;
+  }
+
+  prev_time_X = curr_time;
+  X_SCALE = X_Scale_Values[X_Pointer];
+
+  noInterrupts();
+  X_DECIMATION = X_SCALE;
+  accumSum = 0.0f;     // reset so you don't get one weird partial-average frame right after a change
+  accumCount = 0;
+  interrupts();
 }
 
 //* ========================= Graphing Functions ========================= * //
 // ? Creates a background grid for the graph to be drawn on, maybe remove later
-void grid(){
-
-  for (uint16_t i = 0; i <= 8; i++) {
-    for (uint16_t j = 0; j <= 4; j++) {
-      
-      uint16_t x = i * 16;
-      uint16_t y = j * 16;
-
-      if (x == 0 && y == 0){
-        
-        display.drawLine(x, y, x+1, y);
-        display.drawLine(x, y, x, y+1);
-
-        display.drawLine(x + 6, y, x + 9, y);
-        display.drawLine(x, y + 6, x, y + 9);
-
-      } else if (x == 0 ){
-      
-        display.drawLine(x, y-1, x+1, y-1);
-        display.drawLine(x, y-2, x, y);
-
-        display.drawLine(x + 6, y - 1 , x + 9, y -1);
-        display.drawLine(x, y + 5 , x, y + 8);
-      
-      } else if (y == 0){
-
-        display.drawLine(x-2, y, x, y);
-        display.drawLine(x-1, y, x-1, y+1);         
-
-        display.drawLine(x + 5, y, x + 8, y);
-        display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
-      
-      } else {
-        
-        display.drawLine(x - 2, y - 1 , x, y -1);
-        display.drawLine(x - 1, y -2, x - 1 , y);
-
-        display.drawLine(x + 6, y - 1 , x + 9, y -1);
-        display.drawLine(x - 1 , y + 6 , x - 1, y + 9); 
-      }
-    }
-  }
-}
 
 // Draws the Graph using filtered readings from A0 and A1
 void graph() {
@@ -303,7 +266,6 @@ void graph() {
   uint16_t a2 = latestReadingA2;
   interrupts();
   uint16_t midpoint = map(filterA2(a2), 1023, 0, 0, 63);
-
 
   float temps[GRAPH_WIDTH];
   uint16_t count = ringCount;
@@ -319,8 +281,8 @@ void graph() {
     uint16_t x1 = GRAPH_WIDTH - count + i;
     uint16_t x2 = x1 + 1;
 
-    // temps[i] can now be positive (A0) or negative (A1) —
-    // midpoint - value handles both directions accurately
+    /* temps[i] can now be positive (A0) or negative (A1) —
+    midpoint - value handles both directions accurately */
     int y1 = midpoint - static_cast<int>(temps[i] * Y_SCALE);
     int y2 = midpoint - static_cast<int>(temps[i + 1] * Y_SCALE);
 
@@ -328,7 +290,35 @@ void graph() {
     y2 = constrain(y2, 0, GRAPH_HEIGHT - 1);
 
     display.drawLine(x1, y1, x2, y2);
+  } display.drawLine(0, midpoint, GRAPH_WIDTH - 1, midpoint); // Draw the midpoint line
+}
+
+void graph1() {
+  noInterrupts();
+  uint16_t a2 = latestReadingA2;
+  uint16_t count = ringCount;
+  uint16_t head  = ringHead;
+  interrupts();
+
+  uint16_t midpoint = map(filterA2(a2), 1023, 0, 0, 63);
+  if (count < 2) return;
+
+  for (uint16_t i = 0; i < count - 1; i++) {
+    uint16_t x1 = GRAPH_WIDTH - count + i;
+    uint16_t x2 = x1 + 1;
+
+    uint16_t idx1 = (head + GRAPH_WIDTH - count + i) % GRAPH_WIDTH;
+    uint16_t idx2 = (head + GRAPH_WIDTH - count + i + 1) % GRAPH_WIDTH;
+
+    int y1 = midpoint - static_cast<int>(ringBuf[idx1] * Y_SCALE);
+    int y2 = midpoint - static_cast<int>(ringBuf[idx2] * Y_SCALE);
+
+    y1 = constrain(y1, 0, GRAPH_HEIGHT);
+    y2 = constrain(y2, 0, GRAPH_HEIGHT - 1);
+
+    display.drawLine(x1, y1, x2, y2);
   }
+  display.drawLine(0, midpoint, GRAPH_WIDTH - 1, midpoint);
 }
 
 // Render calls grid() and graph() to draw screen easily
@@ -336,16 +326,14 @@ void render() {
   display.firstPage();
   do {
 
-    grid();
-
-    graph();
+    graph1();
 
   } while (display.nextPage());
 }
 
 // * ======================== Setup and Loop ========================= * //
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   DDRD |= (1 << DDD7);   // set PD7 (pin 7) as OUTPUT
   DDRD &= ~((1 << DDD2) | (1 << DDD3) | (1 << DDD4) | (1 << DDD5));
@@ -353,8 +341,7 @@ void setup() {
   setupADC();
   setupTimer1();
 
-  previous_time = millis(); // Start time of the program for PWM signal generation
-  prev_time = millis();
+  previous_time = prev_time_Y = prev_time_X = millis(); // Start time of the program for PWM signal generation
 
   // Start Screen
   display.begin();
@@ -365,51 +352,11 @@ void setup() {
 
 void loop() { 
 
-  gen_signal();   // Generate PWM Signal w/o Blocking Pins 
-
   // Button Control for Y and X Scale, and Pin State Detection
   pinStates();
   Y_Scale_Control();
   X_Scale_Control();
-
-
-  // Reading Control for A0, A1, and Queue Control for Graphing
-  bool a0IsNew = false;
-  bool a1IsNew = false;
-
-  if (newReadingAvailableA0) {
-
-    noInterrupts();
-    valA0 = latestReadingA0;
-    newReadingAvailableA0 = false;
-    interrupts();
-    a0IsNew = true;
   
-  }
-
-  if (newReadingAvailableA1) {
-    noInterrupts();
-    valA1 = latestReadingA1;
-    newReadingAvailableA1 = false;
-    interrupts();
-    a1IsNew = true;
-  }
-
-  if (a0IsNew || a1IsNew) {
-    queue_Control(valA0, valA1, a0IsNew, a1IsNew);
-  }
-  
-  // Reading Control for A2
-  if (newReadingAvailableA2) {
-    
-    noInterrupts();
-    valA2 = latestReadingA2;
-    newReadingAvailableA2 = false;
-    interrupts();
-
-    filteredA2 = filterA2(valA2);
-  }
-
   // Build pixel data once, outside the page loop
   render();
 }
