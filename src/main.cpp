@@ -1,10 +1,6 @@
-// Display + Arduino
+// Imports, Display and Arduino
 #include <Arduino.h>
 #include <U8g2lib.h>
-
-// Interrupts 
-#include <avr/io.h>
-#include <avr/interrupt.h>
 
 // * ============== All Analog Variables and Related Setup ============== * //
 // Hardware Interrupts

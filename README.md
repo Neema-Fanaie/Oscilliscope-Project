@@ -1,65 +1,47 @@
 # Oscilloscope Project
 
-A DIY digital oscilloscope built on an Arduino Uno, sampling an analog signal and rendering the waveform live on an OLED display.
-
-## Overview
-
-[Project Description]
-
-<!-- [1–2 sentences describing what the project does — e.g. "This project turns an Arduino Uno into a basic single-channel oscilloscope, sampling an analog input and drawing the waveform in real time on a small OLED screen."] -->
+This is a basic Arduino Oscilliscope Project utilisng the Arduino Uno R3, an SD1306/SH1106-class display, and MCP 6272 OpAmp. This project is primarily for fun, so the circuit design is a compromise between doing things "cheaply," and in a cool way to get pratice (reason for using an OpAmp).
 
 ## Features
 
 - Real-time Waveform Display on an OLED Screen (via [u8g2](https://github.com/olikraus/u8g2))
-- Circular/Sample Buffering
-
-<!-- - [Add: adjustable sample rate / voltage scaling / trigger mode / etc., if implemented]
-- [Add: any input protection / attenuation circuitry, if used] -->
+- Ideal diode circuits to differentiate between a positive and negative signal on the regular arduino ADC
+- Buttons to toggle screen settings and potentiometer to move the x-axis line
 
 ## Hardware Requirements
 
-| Component | Notes |
 1. Sensing:
-- OpAmp: MCP 6272, Contains 2 OpAmps which can accuratly rectify signal without error
-- 4x 1N4148 diodes, 4x 10k resistors, 2x 1k resistors, 1x 10nF capacitor near the OpAmp Supply and 1x10μF capacitor near Power Supply Source (Manufactorer's recommended values for MCP6272)
+  - OpAmp: MCP 6272, Contains 2 OpAmps which can accuratly rectify signal without error
+  - 4x 1N4148 diodes, 4x 10k resistors, 2x 1k resistors, 1x 10nF capacitor near the OpAmp Supply and 1x10μF capacitor near Power Supply Source (Manufactorer's recommended values for MCP6272)
 
 2. External Components:
-- Arduino Uno or compatible ATmega328P board and USB cable for Programming
-- 4x Push buttons for User Input (optional, used in scaling)
-- 4x 10k resistors for Pull-down on Push Buttons
-- Potentiometer for moving reference point on screen (optional)
-- OLED display | SSD1306/SH1106-class display compatible with u8g2 |
-- Breadboard and Jumper Wires for Prototyping
+  - Arduino Uno or compatible ATmega328P board and USB cable for Programming
+  - 4x Push buttons for User Input (optional, used in scaling)
+  - 4x 10k resistors for Pull-down on Push Buttons
+  - Potentiometer for moving reference point on screen (optional)
+  - OLED display | SSD1306/SH1106-class display compatible with u8g2 |
+  - Breadboard and Jumper Wires for Prototyping
 
 3. Power Supply:
-- 9V source for OpAmp and Arduino
-- LM2931az voltage regulator to provide 5V for OLED, Buttons and Potentiometer
-
-Limitations: The Arduino Uno's ADC is limited to 10-bit resolution and a maximum sampling rate of ~10 kHz (practical limit due to processing overhead). Input voltage should be within 0–5V unless external circuitry is used for scaling.
-Hardware limitations: OpAmp begins to fail at 15kHz on the rising edge of the signal, but can be usale up to 20kHz. Maybe experiment with different opamps and mcs to get better results.
+  - 9V source for OpAmp and Arduino
+  - LM2931az voltage regulator to provide 5V for OLED, Buttons and Potentiometer
 
 ### Wiring
 
-| Arduino Pin | Connects To | Purpose |
-|---|---|---|
-| [A2 / analog pin] | Signal probe input | Analog signal to be sampled |
-| [SDA/SCL or SPI pins] | OLED display | Display communication |
-| 5V / GND | OLED display, input circuit | Power |
-
-[Add a wiring diagram or photo here if available.]
+[TO BE ADDED SOON]
 
 ## Software Requirements
 
 This is a [PlatformIO](https://platformio.org/) project targeting the `uno` environment.
 
 - [PlatformIO Core](https://platformio.org/install/cli) or the [PlatformIO IDE extension for VS Code](https://platformio.org/install/ide?install=vscode)
-- Arduino framework (installed automatically by PlatformIO)
+- Arduino Framework (installed automatically by PlatformIO)
+- U8g2 Library
 
 ### Dependencies
 
 Declared in `platformio.ini` and installed automatically by PlatformIO:
 
-- [`smfsw/Queue`](https://github.com/Fapitxu/Queue) — sample buffering
 - [`olikraus/u8g2`](https://github.com/olikraus/u8g2) — OLED display driver/graphics library
 
 ## Getting Started
@@ -71,11 +53,12 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
    ```
 2. Open the folder in VS Code with the PlatformIO extension installed (or use the PlatformIO CLI).
 3. Connect your Arduino Uno via USB.
-4. Build and upload:
+4. Setup Circuit as Shown in the Wiring Diagram
+5. Build and upload:
    ```bash
    pio run --target upload
    ```
-5. Open the serial monitor if needed for debugging:
+6. Open the serial monitor if needed for debugging:
    ```bash
    pio device monitor
    ```
@@ -94,25 +77,25 @@ Declared in `platformio.ini` and installed automatically by PlatformIO:
 
 ## How It Works
 
-<!-- [Briefly describe the sampling/display pipeline, e.g.:] -->
-1. The analog input pin is sampled at a fixed interval using `analogRead()` (or direct ADC register access).
-2. Samples are pushed into a queue/ring buffer to hold a window of the waveform.
+1. The analog input pin is sampled at a fixed interval with direct ADC register access.
+2. Samples are pushed into a ring buffer to hold a window of the waveform.
 3. The buffered samples are scaled and drawn as a line/pixel plot on the OLED via u8g2.
 4. The display refreshes continuously to show a "live" trace.
 
 ## Usage
 
-<!-- [Describe how to interpret the display, any buttons/controls for scale or trigger, expected input voltage range, etc.] -->
+[TO BE ADDED SOON]
 
 ## Limitations
 
-- [e.g. Sampling rate limited by Arduino Uno's ADC speed — not suitable for high-frequency signals]
-- [e.g. Input voltage range limited to 0–5V; external circuitry required for AC or higher-voltage signals]
+- The Arduino Uno's ADC is limited to 10-bit resolution and a maximum sampling rate of ~10 kHz (practical limit due to processing overhead).
+- Input voltage should be within 0–5V unless external circuitry is used for scaling.
+- OpAmp begins to fail at 15kHz on the rising edge of the signal, but can be usale up to 20kHz. Maybe experiment with different opamps and mcs to get better results.
 
 ## Roadmap / Possible Improvements
 
-- [ ] [e.g. Add trigger functionality]
-- [ ] [e.g. Support multiple channels]
+- [ ] Add Trigger Functionality
+- [ ] Support multiple channels
 
 ## Author
 
